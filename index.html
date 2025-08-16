@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>LLM Portfolio — EUR</title>
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#0b1020">
+  <style>
+    :root { --bg:#0b1020; --panel:#121a2b; --ink:#e7ebf3; --muted:#97a2b8; --up:#34d399; --down:#f87171; }
+    body { margin:0; font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica; background:var(--bg); color:var(--ink); }
+    .wrap { max-width: 1100px; margin: 18px auto; padding: 0 14px; }
+    header { display:flex; gap:10px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
+    h1 { font-size: 18px; margin:0; }
+    .muted { color:var(--muted); font-size:12px; }
+    .card { background:var(--panel); border:1px solid #1b243a; border-radius:12px; padding:14px; }
+    .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+    .btn { background:#1a2339; color:#fff; border:1px solid #233154; border-radius:10px; padding:8px 10px; }
+    table { width:100%; border-collapse: collapse; font-size:14px; }
+    th, td { padding:8px 6px; border-bottom:1px solid #1b243a; text-align:right; white-space:nowrap; }
+    th:first-child, td:first-child { text-align:left; }
+    .pill { padding:3px 8px; border-radius:999px; font-weight:600; font-size:12px; }
+    .gain { background: rgba(52,211,153,.15); color:#a7f3d0; }
+    .loss { background: rgba(248,113,113,.15); color:#fecaca; }
+    canvas { width:100%; height:300px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>LLM Portfolio (EUR) <span class="muted">MSFT · NVDA · GOOG · AMZN · META</span></h1>
+      <div class="row">
+        <button class="btn" id="refresh">🔄 Refresh</button>
+        <span class="muted" id="status">—</span>
+      </div>
+    </header>
+
+    <div class="card">
+      <div class="row" style="justify-content:space-between;">
+        <div><div class="muted">Total value</div><div id="portValue">—</div></div>
+        <div><div class="muted">Total P/L</div><div id="portPL">—</div></div>
+        <div><div class="muted">Day change</div><div id="portDay">—</div></div>
+        <div><div class="muted">FX (USD→EUR)</div><div id="fxInfo">—</div></div>
+      </div>
+      <table id="tbl">
+        <thead><tr><th>Ticker</th><th>Shares</th><th>Price (EUR)</th><th>Value (EUR)</th><th>Cost (EUR)</th><th>P/L (EUR)</th><th>Day %</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <div class="row" style="justify-content:space-between;">
+        <strong>Last 2 months — Portfolio value (EUR)</strong>
+        <span class="muted">Daily closes • fixed share counts</span>
+      </div>
+      <canvas id="equity"></canvas>
+    </div>
+
+    <p class="muted" style="margin-top:10px">Tip: In Safari, tap <strong>Share</strong> → <strong>Add to Home Screen</strong> to create an icon.</p>
+  </div>
+
+  <script>
+    if ('serviceWorker' in navigator) window.addEventListener('load', ()=> navigator.serviceWorker.register('./sw.js'));
+
+    const PORT = [
+      { ticker:'MSFT', shares:13, costPerEUR:447.25 },
+      { ticker:'NVDA', shares:33, costPerEUR:155.68 },
+      { ticker:'GOOG', shares:23, costPerEUR:174.74 },
+      { ticker:'AMZN', shares:15, costPerEUR:198.70 },
+      { ticker:'META', shares:3,  costPerEUR:670.40 },
+    ];
+
+    const fmtEUR = x => new Intl.NumberFormat('de-DE',{style:'currency',currency:'EUR'}).format(x||0);
+    let fx = 0.9, quotes = {}, chart;
+
+    async function fetchFX(){
+      try{
+        const r = await fetch('https://api.exchangerate.host/latest?base=USD&symbols=EUR');
+        const j = await r.json();
+        fx = j?.rates?.EUR ?? fx;
+      }catch(e){
+        console.warn('FX error', e);
+      }
+      document.getElementById('fxInfo').textContent = fx ? fx.toFixed(4) : '—';
+    }
+
+    async function fetchQuotes(){
+      try{
+        const syms = PORT.map(p=>p.ticker).join(',');
+        const r = await fetch(`/.netlify/functions/quote?t=${encodeURIComponent(syms)}`);
+        quotes = await r.json();
+      }catch(e){
+        quotes = {};
+        document.getElementById('status').textContent = 'Quote fetch failed';
+      }
+    }
+
+    function renderTable(){
+      const tbody = document.querySelector('#tbl tbody'); tbody.innerHTML='';
+      let totVal=0, totCost=0, dayImp=0;
+      PORT.forEach(p=>{
+        const q = quotes[p.ticker]||{};
+        const priceEUR = (q.price!=null)?q.price*fx:null;
+        const val = priceEUR!=null ? p.shares*priceEUR : 0;
+        const cost = p.shares * p.costPerEUR;
+        const pl = (priceEUR!=null) ? val - cost : null;
+        const dayPct = q.dayPct!=null ? q.dayPct : null;
+        if(dayPct!=null) dayImp += val*(dayPct/100);
+        totVal += val; totCost += cost;
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${p.ticker}</td>
+          <td style="text-align:right">${p.shares}</td>
+          <td style="text-align:right">${priceEUR!=null?fmtEUR(priceEUR):'—'}</td>
+          <td style="text-align:right">${fmtEUR(val)}</td>
+          <td style="text-align:right">${fmtEUR(cost)}</td>
+          <td style="text-align:right">${pl!=null?`<span class="pill ${pl>=0?'gain':'loss'}">${pl>=0?'+':''}${fmtEUR(pl)}</span>`:'—'}</td>
+          <td style="text-align:right">${dayPct!=null?(dayPct>0?'+':'')+dayPct.toFixed(2)+'%':'—'}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+      document.getElementById('portValue').textContent = fmtEUR(totVal);
+      const tPL = totVal - totCost;
+      document.getElementById('portPL').textContent = (tPL>=0?'+':'') + fmtEUR(tPL);
+      const dayPctTot = (totVal>0)?(dayImp/totVal*100):0;
+      document.getElementById('portDay').textContent = (totVal>0)?((dayPctTot>0?'+':'')+dayPctTot.toFixed(2)+'%'):'—';
+    }
+
+    async function fetchEquity2M(){
+      const end = new Date(); const start = new Date(); start.setMonth(end.getMonth()-2);
+      const startSec = Math.floor(start.getTime()/1000), endSec = Math.floor(end.getTime()/1000);
+
+      // FX timeseries
+      let fxSeries = {};
+      try{
+        const sd = start.toISOString().slice(0,10), ed = end.toISOString().slice(0,10);
+        const fxUrl = `https://api.exchangerate.host/timeseries?base=USD&symbols=EUR&start_date=${sd}&end_date=${ed}`;
+        const rfx = await fetch(fxUrl); const jfx = await rfx.json();
+        fxSeries = jfx.rates || {};
+      }catch(e){
+        console.warn('FX history error', e);
+      }
+
+      // Prices per ticker via Netlify function
+      const hist = {};
+      await Promise.all(PORT.map(async p=>{
+        try{
+          const r = await fetch(`/.netlify/functions/history?t=${encodeURIComponent(p.ticker)}&start=${startSec}&end=${endSec}`);
+          const arr = await r.json();
+          hist[p.ticker] = arr.map(o => ({
+            date: new Date(o.ts*1000).toISOString().slice(0,10),
+            closeUSD: o.close
+          }));
+        }catch(e){ hist[p.ticker]=[]; }
+      }));
+
+      const dates = [...new Set([].concat(...Object.values(hist).map(a=>a.map(o=>o.date))))].sort();
+      return dates.map(date => {
+        const fxe = fxSeries[date]?.EUR ?? fx;
+        let total = 0;
+        PORT.forEach(p => {
+          const rec = (hist[p.ticker]||[]).find(o=>o.date===date);
+          if(rec && rec.closeUSD!=null) total += p.shares*rec.closeUSD*fxe;
+        });
+        return {date, value: total};
+      }).filter(x=>x.value>0);
+    }
+
+    async function renderEquity(){
+      try{
+        const data = await fetchEquity2M();
+        const labels = data.map(d=>d.date);
+        const values = data.map(d=>d.value);
+        if(window.chart){ window.chart.destroy(); }
+        window.chart = new Chart(document.getElementById('equity'), {
+          type:'line',
+          data:{ labels, datasets:[{ label:'Portfolio (EUR)', data:values, fill:false }]},
+          options:{ plugins:{ legend:{ labels:{ color:'#e7ebf3'} } },
+            scales:{ x:{ ticks:{ color:'#c9d3ea'} }, y:{ ticks:{ color:'#c9d3ea'} } } }
+        });
+      }catch(e){
+        document.getElementById('status').textContent = 'History fetch failed';
+      }
+    }
+
+    async function refreshAll(){
+      document.getElementById('status').textContent = 'Updating…';
+      await fetchFX(); await fetchQuotes(); renderTable(); await renderEquity();
+      document.getElementById('status').textContent = 'Last update: '+new Date().toLocaleString();
+    }
+    document.getElementById('refresh').addEventListener('click', refreshAll);
+
+    (async function boot(){
+      await new Promise((resolve,reject)=>{ const s=document.createElement('script'); s.src='https://cdn.jsdelivr.net/npm/chart.js'; s.onload=resolve; s.onerror=reject; document.head.appendChild(s); });
+      await refreshAll();
+    })();
+  </script>
+</body>
+</html>
